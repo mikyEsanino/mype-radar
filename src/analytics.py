@@ -214,27 +214,105 @@ def obtener_tendencia_mensual(
 
     return tabla
 
+def analizar_mercado(
+    palabras_clave: list[str],
+    departamento: str | None = None,
+    tipo_orden: str | None = None,
+    limite_entidades: int = 10,
+) -> dict[str, Any]:
+    """Ejecuta el análisis completo y devuelve datos serializables.
+
+    Esta función será el contrato entre:
+    - Gemma
+    - La capa de datos
+    - La interfaz Streamlit
+    """
+    resultados = buscar_ordenes(
+        palabras_clave=palabras_clave,
+        departamento=departamento,
+        tipo_orden=tipo_orden,
+    )
+
+    resumen = calcular_resumen(resultados)
+
+    entidades = obtener_entidades_principales(
+        resultados,
+        limite=limite_entidades,
+    )
+
+    tendencia = obtener_tendencia_mensual(resultados)
+
+    ejemplos = []
+
+    if not resultados.empty:
+        columnas_ejemplo = [
+            "entidad",
+            "departamento",
+            "tipo_orden",
+            "descripcion",
+            "monto_pen",
+            "periodo",
+        ]
+
+        ejemplos = (
+            resultados[columnas_ejemplo]
+            .sort_values("monto_pen", ascending=False)
+            .head(10)
+            .fillna("")
+            .to_dict(orient="records")
+        )
+
+    return {
+        "consulta": {
+            "palabras_clave": palabras_clave,
+            "departamento": departamento or "Todo el Perú",
+            "tipo_orden": tipo_orden or "Ambos",
+        },
+        "resumen": resumen,
+        "entidades_principales": (
+            entidades.fillna("").to_dict(orient="records")
+        ),
+        "tendencia_mensual": (
+            tendencia.fillna("").to_dict(orient="records")
+        ),
+        "ordenes_ejemplo": ejemplos,
+    }
 
 if __name__ == "__main__":
-    palabras = [
-        "limpieza",
-        "pintura",
-        "mantenimiento",
-    ]
-
-    ordenes = buscar_ordenes(
-        palabras_clave=palabras,
+    
+    resultado = analizar_mercado(
+        palabras_clave=[
+            "servicio de limpieza",
+            "limpieza de oficinas",
+            "pintado de ambientes",
+            "mantenimiento de locales",
+        ],
+        departamento="Lima",
         tipo_orden="servicio",
     )
 
-    resumen = calcular_resumen(ordenes)
-
-    print("\nResumen:")
-    for clave, valor in resumen.items():
+    print("\nRESUMEN")
+    for clave, valor in resultado["resumen"].items():
         print(f"- {clave}: {valor}")
 
-    print("\nEntidades principales:")
-    print(obtener_entidades_principales(ordenes).to_string(index=False))
+    print("\nENTIDADES PRINCIPALES")
+    for entidad in resultado["entidades_principales"][:5]:
+        print(
+            f"- {entidad['entidad']}: "
+            f"{entidad['cantidad_ordenes']} órdenes"
+        )
 
-    print("\nTendencia mensual:")
-    print(obtener_tendencia_mensual(ordenes).to_string(index=False))
+    print("\nTENDENCIA")
+    for mes in resultado["tendencia_mensual"]:
+        print(
+            f"- {mes['periodo']}: "
+            f"{mes['cantidad_ordenes']} órdenes"
+        )
+
+    print("\nEJEMPLOS DE ÓRDENES")
+    for orden in resultado["ordenes_ejemplo"][:10]:
+        print(
+            f"- {orden['descripcion']} | "
+            f"{orden['entidad']} | "
+            f"S/ {orden['monto_pen']}"
+        )
