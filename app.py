@@ -9,14 +9,12 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.analytics import analizar_mercado
-from src.data_service import (
-    adapt_analytics_result,
-    build_report_context,
-    extract_keywords,
-    load_orders,
-    source_record_count,
+from src.analytics import (
+    analizar_mercado,
+    obtener_catalogo_mercado,
+    obtener_firma_fuente,
 )
+from src.data_service import build_report_context, extract_keywords
 from src.gemma_agent import GemmaAgentError, analizar_negocio
 from src.report_generator import ReportGenerationError, generar_informe
 
@@ -31,6 +29,34 @@ YELLOW = "#F4B942"
 LIGHT_BLUE = "#BFD7E2"
 PALE = "#F4FAFB"
 GRAY = "#5E6B78"
+
+
+@st.cache_data(show_spinner=False)
+def cached_market_catalog(
+    app_dir_value: str,
+    source_fingerprint: str,
+) -> dict[str, Any]:
+    """Carga el catálogo una sola vez por versión de la fuente de datos."""
+    del source_fingerprint  # Forma parte de la clave de caché.
+    return obtener_catalogo_mercado(Path(app_dir_value))
+
+
+@st.cache_data(show_spinner=False)
+def cached_market_analysis(
+    app_dir_value: str,
+    source_fingerprint: str,
+    keywords: tuple[str, ...],
+    departments: tuple[str, ...],
+    object_types: tuple[str, ...],
+) -> dict[str, Any]:
+    """Ejecuta analizar_mercado solo cuando cambian consulta o archivos."""
+    del source_fingerprint  # Invalida la caché si cambia un Parquet.
+    return analizar_mercado(
+        palabras_clave=list(keywords),
+        departamentos=list(departments) or None,
+        objetos_contractuales=list(object_types) or None,
+        app_dir=Path(app_dir_value),
+    )
 
 EXAMPLES = {
     "Escribir mi propia descripción": "",
@@ -823,30 +849,6 @@ def generate_analysis_report(
         return build_report(analysis), "local", error
 
 
-def run_market_analysis(
-    orders: pd.DataFrame,
-    *,
-    keywords: list[str],
-    departments: list[str],
-    object_types: list[str],
-) -> dict[str, Any]:
-    """Ejecuta analytics.analizar_mercado y adapta su salida a la UI actual."""
-    monthly_dir = orders.attrs.get("monthly_dir")
-    kwargs: dict[str, Any] = {
-        "palabras_clave": keywords,
-        "departamento": departments or None,
-        "objeto_contractual": object_types or None,
-    }
-
-    if monthly_dir:
-        kwargs["monthly_dir"] = Path(str(monthly_dir))
-    else:
-        kwargs["datos"] = orders
-
-    market_payload = analizar_mercado(**kwargs)
-    return adapt_analytics_result(market_payload)
-
-
 def inject_workspace_styles() -> None:
     """Estilos exclusivos del panel; no se cargan en la página de inicio."""
     st.markdown(
@@ -1263,7 +1265,8 @@ def render_workspace_header(is_demo: bool, source_label: str) -> None:
 
 
 def render_business_tab(
-    orders: pd.DataFrame,
+    total_records: int,
+    source_fingerprint: str,
     departments: list[str],
     object_types: list[str],
 ) -> None:
@@ -1369,7 +1372,7 @@ def render_business_tab(
             )
 
             st.divider()
-            st.caption(f"Registros disponibles en la fuente: {source_record_count(orders):,}")
+            st.caption(f"Registros disponibles en la fuente: {total_records:,}")
             st.caption(
                 "Las órdenes anuladas se separan automáticamente del resultado principal."
             )
@@ -1402,13 +1405,15 @@ def render_business_tab(
             return
 
         try:
-            result = run_market_analysis(
-                orders,
-                keywords=keywords,
-                departments=selected_departments,
-                object_types=selected_objects,
-            )
-        except (FileNotFoundError, ValueError, KeyError) as exc:
+            with st.spinner("Analizando órdenes públicas y preparando resultados..."):
+                result = cached_market_analysis(
+                    str(APP_DIR),
+                    source_fingerprint,
+                    tuple(keywords),
+                    tuple(selected_departments),
+                    tuple(selected_objects),
+                )
+        except (FileNotFoundError, ValueError, KeyError, OSError) as exc:
             st.error(f"No se pudo ejecutar el análisis de mercado: {exc}")
             return
 
@@ -1418,13 +1423,14 @@ def render_business_tab(
                 _term_key(term) for term in fallback_keywords
             } != {_term_key(term) for term in keywords}:
                 try:
-                    fallback_result = run_market_analysis(
-                        orders,
-                        keywords=fallback_keywords,
-                        departments=selected_departments,
-                        object_types=selected_objects,
+                    fallback_result = cached_market_analysis(
+                        str(APP_DIR),
+                        source_fingerprint,
+                        tuple(fallback_keywords),
+                        tuple(selected_departments),
+                        tuple(selected_objects),
                     )
-                except (FileNotFoundError, ValueError, KeyError):
+                except (FileNotFoundError, ValueError, KeyError, OSError):
                     fallback_result = result
                 if fallback_result["summary"]["total_orders"] > 0:
                     keywords = fallback_keywords
@@ -1856,16 +1862,16 @@ def render_report_tab(analysis: dict[str, Any] | None) -> None:
 
 
 def render_workspace() -> None:
-    orders, source_label, is_demo = load_orders(APP_DIR)
-    departments = sorted(
-        orders["DEPARTAMENTO"].dropna().astype(str).unique().tolist()
-    )
-    object_types = sorted(
-        orders["OBJETOCONTRACTUAL"].dropna().astype(str).unique().tolist()
-    )
+    source_fingerprint = obtener_firma_fuente(APP_DIR)
+    catalog = cached_market_catalog(str(APP_DIR), source_fingerprint)
+    departments = list(catalog["departments"])
+    object_types = list(catalog["object_types"])
 
     inject_workspace_styles()
-    render_workspace_header(is_demo, source_label)
+    render_workspace_header(
+        bool(catalog["is_demo"]),
+        str(catalog["source_label"]),
+    )
 
     if st.session_state.show_tutorial:
         tutorial_dialog()
@@ -1875,7 +1881,12 @@ def render_workspace() -> None:
     )
 
     with business_tab:
-        render_business_tab(orders, departments, object_types)
+        render_business_tab(
+            int(catalog["total_records"]),
+            source_fingerprint,
+            departments,
+            object_types,
+        )
 
     analysis = st.session_state.get("analysis")
 

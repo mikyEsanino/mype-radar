@@ -1,22 +1,21 @@
-"""Búsqueda y análisis de órdenes públicas para MYPE Radar.
+"""Motor único de búsqueda y análisis de órdenes públicas para MYPE Radar.
 
-El módulo trabaja con los Parquet mensuales procesados y expone
-``analizar_mercado`` como contrato principal entre la capa de datos,
-Gemma y la interfaz Streamlit.
+Este módulo concentra toda la lectura de fuentes, normalización de esquemas,
+filtrado y cálculo. ``app.py`` usa ``analizar_mercado`` como única entrada para
+obtener métricas, gráficos y evidencia. ``data_service.py`` no vuelve a leer ni
+analizar los Parquet.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
-from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import pandas as pd
 
-
-MONTHLY_DIR = Path("data/processed/monthly")
 
 CANONICAL_COLUMNS = [
     "entidad",
@@ -41,69 +40,12 @@ CANONICAL_COLUMNS = [
     "texto_busqueda",
 ]
 
-SEARCH_COLUMNS = [
-    "entidad",
-    "departamento",
-    "tipo_orden",
-    "descripcion",
-    "objeto_contractual",
-    "monto_pen",
-    "periodo",
-    "proveedor",
-    "texto_busqueda",
+_DATE_COLUMNS = [
+    "fecha_registro",
+    "fecha_emision",
+    "fecha_compromiso_presupuestal",
+    "fecha_notificacion",
 ]
-
-_COLUMN_ALIASES = {
-    "entidad": "entidad",
-    "ruc entidad": "ruc_entidad",
-    "ruc_entidad": "ruc_entidad",
-    "fecha registro": "fecha_registro",
-    "fecha_registro": "fecha_registro",
-    "fecha de emision": "fecha_emision",
-    "fecha emision": "fecha_emision",
-    "fecha_emision": "fecha_emision",
-    "fecha compromiso presupuestal": "fecha_compromiso_presupuestal",
-    "fecha_compromiso_presupuestal": "fecha_compromiso_presupuestal",
-    "fecha de notificacion": "fecha_notificacion",
-    "fecha notificacion": "fecha_notificacion",
-    "fecha_notificacion": "fecha_notificacion",
-    "tipoorden": "tipo_orden",
-    "tipo orden": "tipo_orden",
-    "tipo_orden": "tipo_orden",
-    "nro de orden": "numero_orden",
-    "numero orden": "numero_orden",
-    "numero_orden": "numero_orden",
-    "orden": "orden",
-    "descripcion orden": "descripcion",
-    "descripcion_orden": "descripcion",
-    "descripcion": "descripcion",
-    "moneda": "moneda",
-    "monto total orden original": "monto_pen",
-    "monto_total_orden_original": "monto_pen",
-    "monto pen": "monto_pen",
-    "monto_pen": "monto_pen",
-    "objetocontractual": "objeto_contractual",
-    "objeto contractual": "objeto_contractual",
-    "objeto_contractual": "objeto_contractual",
-    "estadocontratacion": "estado_contratacion",
-    "estado contratacion": "estado_contratacion",
-    "estado_contratacion": "estado_contratacion",
-    "tipodecontratacion": "tipo_contratacion",
-    "tipo contratacion": "tipo_contratacion",
-    "tipo_contratacion": "tipo_contratacion",
-    "departamento": "departamento",
-    "ruc contratista": "ruc_proveedor",
-    "ruc proveedor": "ruc_proveedor",
-    "ruc_contratista": "ruc_proveedor",
-    "ruc_proveedor": "ruc_proveedor",
-    "nombre razon contratista": "proveedor",
-    "nombre_razon_contratista": "proveedor",
-    "proveedor": "proveedor",
-    "periodo": "periodo",
-    "mes": "periodo",
-    "texto busqueda": "texto_busqueda",
-    "texto_busqueda": "texto_busqueda",
-}
 
 _DEFAULTS: dict[str, Any] = {
     "entidad": "Entidad no indicada",
@@ -128,45 +70,130 @@ _DEFAULTS: dict[str, Any] = {
     "texto_busqueda": "",
 }
 
-_DATE_COLUMNS = [
-    "fecha_registro",
-    "fecha_emision",
-    "fecha_compromiso_presupuestal",
-    "fecha_notificacion",
+# Las claves están normalizadas por ``normalizar_texto``.
+_COLUMN_ALIASES = {
+    "entidad": "entidad",
+    "ruc entidad": "ruc_entidad",
+    "fecha registro": "fecha_registro",
+    "fecha de emision": "fecha_emision",
+    "fecha emision": "fecha_emision",
+    "fecha compromiso presupuestal": "fecha_compromiso_presupuestal",
+    "fecha de notificacion": "fecha_notificacion",
+    "fecha notificacion": "fecha_notificacion",
+    "tipoorden": "tipo_orden",
+    "tipo orden": "tipo_orden",
+    "nro de orden": "numero_orden",
+    "numero de orden": "numero_orden",
+    "numero orden": "numero_orden",
+    "orden": "orden",
+    "descripcion orden": "descripcion",
+    "descripcion de orden": "descripcion",
+    "descripcion": "descripcion",
+    "moneda": "moneda",
+    "monto total orden original": "monto_pen",
+    "monto pen": "monto_pen",
+    "monto": "monto_pen",
+    "objetocontractual": "objeto_contractual",
+    "objeto contractual": "objeto_contractual",
+    "estadocontratacion": "estado_contratacion",
+    "estado contratacion": "estado_contratacion",
+    "tipodecontratacion": "tipo_contratacion",
+    "tipo de contratacion": "tipo_contratacion",
+    "tipo contratacion": "tipo_contratacion",
+    "departamento": "departamento",
+    "ruc contratista": "ruc_proveedor",
+    "ruc proveedor": "ruc_proveedor",
+    "nombre razon contratista": "proveedor",
+    "nombre o razon social contratista": "proveedor",
+    "proveedor": "proveedor",
+    "periodo": "periodo",
+    "mes": "periodo",
+    "texto busqueda": "texto_busqueda",
+}
+
+_CANONICAL_TO_LEGACY = {
+    "entidad": "ENTIDAD",
+    "ruc_entidad": "RUC_ENTIDAD",
+    "fecha_registro": "FECHA_REGISTRO",
+    "fecha_emision": "FECHA_DE_EMISION",
+    "fecha_compromiso_presupuestal": "FECHA_COMPROMISO_PRESUPUESTAL",
+    "fecha_notificacion": "FECHA_DE_NOTIFICACION",
+    "tipo_orden": "TIPOORDEN",
+    "numero_orden": "NRO_DE_ORDEN",
+    "orden": "ORDEN",
+    "descripcion": "DESCRIPCION_ORDEN",
+    "moneda": "MONEDA",
+    "monto_pen": "MONTO_TOTAL_ORDEN_ORIGINAL",
+    "objeto_contractual": "OBJETOCONTRACTUAL",
+    "estado_contratacion": "ESTADOCONTRATACION",
+    "tipo_contratacion": "TIPODECONTRATACION",
+    "departamento": "DEPARTAMENTO",
+    "ruc_proveedor": "RUC_CONTRATISTA",
+    "proveedor": "NOMBRE_RAZON_CONTRATISTA",
+}
+
+
+SAMPLE_DESCRIPTIONS = [
+    ("Adquisición de computadoras portátiles y accesorios", "Bien"),
+    ("Adquisición de impresoras multifuncionales", "Bien"),
+    ("Servicio de mantenimiento preventivo de equipos informáticos", "Servicio"),
+    ("Servicio de soporte técnico y mesa de ayuda", "Servicio"),
+    ("Servicio integral de limpieza de oficinas", "Servicio"),
+    ("Servicio de desinfección de instalaciones", "Servicio"),
+    ("Adquisición de implementos de limpieza", "Bien"),
+    ("Adquisición de alimentos para atención institucional", "Bien"),
+    ("Servicio de catering para actividades institucionales", "Servicio"),
+    ("Suministro de refrigerios para jornadas de capacitación", "Bien"),
+    ("Servicio de reparación y acondicionamiento de infraestructura", "Servicio"),
+    ("Servicio de pintura de ambientes institucionales", "Servicio"),
+    ("Adquisición de materiales para reparaciones menores", "Bien"),
+]
+
+_DEMO_DEPARTMENTS = ["Lima", "Arequipa", "La Libertad", "Piura", "Cusco", "Junín"]
+_DEMO_ENTITIES = [
+    "Municipalidad Provincial",
+    "Gobierno Regional",
+    "Hospital Público",
+    "Universidad Nacional",
+    "Ministerio",
+]
+_DEMO_SUPPLIERS = [
+    "Tecnología Andina SAC",
+    "Servicios Integrales del Perú EIRL",
+    "Comercializadora Nacional SAC",
+    "Soluciones Institucionales SAC",
 ]
 
 
 def normalizar_texto(texto: Any) -> str:
-    """Normaliza una palabra o frase para búsquedas y comparaciones."""
+    """Normaliza texto para búsquedas y comparaciones estables."""
     resultado = "" if texto is None else str(texto)
-    resultado = resultado.strip().lower()
-    resultado = unicodedata.normalize("NFKD", resultado)
+    resultado = unicodedata.normalize("NFKD", resultado.strip().lower())
     resultado = "".join(
-        caracter
-        for caracter in resultado
-        if not unicodedata.combining(caracter)
+        caracter for caracter in resultado if not unicodedata.combining(caracter)
     )
     resultado = re.sub(r"[^a-z0-9]+", " ", resultado)
-    resultado = re.sub(r"\s+", " ", resultado)
-    return resultado.strip()
+    return re.sub(r"\s+", " ", resultado).strip()
+
+
+def _canonical_column_name(column: Any) -> str | None:
+    return _COLUMN_ALIASES.get(normalizar_texto(column))
 
 
 def _normalizar_columnas(frame: pd.DataFrame) -> pd.DataFrame:
-    """Convierte esquemas históricos o normalizados al esquema canónico."""
+    """Convierte esquemas en mayúsculas o minúsculas al esquema canónico."""
     data = frame.copy()
     renames: dict[Any, str] = {}
-    reserved = {str(column) for column in data.columns}
+    occupied = {str(column) for column in data.columns}
 
     for column in data.columns:
-        raw = str(column)
-        normalized = normalizar_texto(raw)
-        target = _COLUMN_ALIASES.get(raw.lower()) or _COLUMN_ALIASES.get(normalized)
-        if not target or raw == target:
+        target = _canonical_column_name(column)
+        if not target or str(column) == target:
             continue
-        if target in reserved or target in renames.values():
+        if target in occupied or target in renames.values():
             continue
         renames[column] = target
-        reserved.add(target)
+        occupied.add(target)
 
     if renames:
         data = data.rename(columns=renames)
@@ -179,33 +206,29 @@ def _normalizar_columnas(frame: pd.DataFrame) -> pd.DataFrame:
         data[column] = pd.to_datetime(data[column], errors="coerce")
 
     data["monto_pen"] = pd.to_numeric(
-        data["monto_pen"],
-        errors="coerce",
+        data["monto_pen"], errors="coerce"
     ).fillna(0.0)
 
-    string_columns = [
-        column
-        for column in CANONICAL_COLUMNS
-        if column not in _DATE_COLUMNS and column != "monto_pen"
-    ]
-    for column in string_columns:
+    for column in CANONICAL_COLUMNS:
+        if column in _DATE_COLUMNS or column == "monto_pen":
+            continue
         data[column] = data[column].fillna("").astype(str).str.strip()
 
     missing_period = data["periodo"].eq("")
     if missing_period.any():
-        generated_period = data["fecha_emision"].dt.to_period("M").astype(str)
-        generated_period = generated_period.replace("NaT", "")
-        data.loc[missing_period, "periodo"] = generated_period.loc[missing_period]
+        generated = data["fecha_emision"].dt.to_period("M").astype(str)
+        generated = generated.replace("NaT", "")
+        data.loc[missing_period, "periodo"] = generated.loc[missing_period]
 
-    object_missing = data["objeto_contractual"].map(normalizar_texto).isin(
+    missing_object = data["objeto_contractual"].map(normalizar_texto).isin(
         {"", "no indicado"}
     )
-    if object_missing.any():
-        normalized_type = data["tipo_orden"].map(normalizar_texto)
+    if missing_object.any():
+        order_type = data["tipo_orden"].map(normalizar_texto)
         inferred = pd.Series("No indicado", index=data.index, dtype="object")
-        inferred.loc[normalized_type.str.contains(r"compra|bien", regex=True)] = "Bien"
-        inferred.loc[normalized_type.str.contains(r"servicio", regex=True)] = "Servicio"
-        data.loc[object_missing, "objeto_contractual"] = inferred.loc[object_missing]
+        inferred.loc[order_type.str.contains(r"compra|bien", regex=True)] = "Bien"
+        inferred.loc[order_type.str.contains("servicio", regex=False)] = "Servicio"
+        data.loc[missing_object, "objeto_contractual"] = inferred.loc[missing_object]
 
     search_parts = [
         "entidad",
@@ -226,325 +249,310 @@ def _normalizar_columnas(frame: pd.DataFrame) -> pd.DataFrame:
     data.loc[missing_search, "texto_busqueda"] = generated_search.loc[missing_search]
     data["texto_busqueda"] = data["texto_busqueda"].map(normalizar_texto)
 
+    empty_order = data["orden"].eq("")
+    if empty_order.any():
+        generated_ids = [f"ORD-{index + 1:07d}" for index in range(len(data))]
+        data.loc[empty_order, "orden"] = pd.Series(generated_ids, index=data.index)[
+            empty_order
+        ]
+
     return data[CANONICAL_COLUMNS].copy()
 
 
-def obtener_archivos_parquet(
-    monthly_dir: str | Path | None = None,
-) -> list[Path]:
-    """Devuelve los archivos mensuales procesados."""
-    directory = Path(monthly_dir) if monthly_dir is not None else MONTHLY_DIR
-    archivos = sorted(directory.glob("*.parquet"))
+def _build_sample_orders(rows: int = 420) -> pd.DataFrame:
+    """Genera datos determinísticos solo cuando no existe una fuente procesada."""
+    import random
 
-    if not archivos:
-        raise FileNotFoundError(
-            f"No se encontraron archivos Parquet en {directory}. "
-            "Primero ejecuta el procesamiento de datos."
+    rng = random.Random(2026)
+    records: list[dict[str, Any]] = []
+    for index in range(rows):
+        description, object_type = rng.choice(SAMPLE_DESCRIPTIONS)
+        emission = pd.Timestamp("2025-01-01") + pd.Timedelta(days=rng.randint(0, 364))
+        department = rng.choice(_DEMO_DEPARTMENTS)
+        entity = f"{rng.choice(_DEMO_ENTITIES)} de {department}"
+        order_type = "Orden de Compra" if object_type == "Bien" else "Orden de Servicio"
+        amount = round(
+            rng.choice([2500, 4800, 7900, 12500, 24000, 46000, 85000])
+            * rng.uniform(0.85, 1.35),
+            2,
+        )
+        records.append(
+            {
+                "entidad": entity,
+                "ruc_entidad": str(20000000000 + rng.randint(1000000, 9999999)),
+                "fecha_registro": emission - pd.Timedelta(days=rng.randint(0, 5)),
+                "fecha_emision": emission,
+                "fecha_compromiso_presupuestal": emission
+                + pd.Timedelta(days=rng.randint(0, 8)),
+                "fecha_notificacion": emission + pd.Timedelta(days=rng.randint(1, 12)),
+                "tipo_orden": order_type,
+                "numero_orden": f"{rng.randint(1, 9999):04d}",
+                "orden": f"{'OC' if object_type == 'Bien' else 'OS'}-{index + 1:05d}-2025",
+                "descripcion": description,
+                "moneda": "PEN",
+                "monto_pen": amount,
+                "objeto_contractual": object_type,
+                "estado_contratacion": rng.choices(
+                    ["Emitida", "Comprometida", "Devengada", "Anulada"],
+                    weights=[22, 28, 44, 6],
+                )[0],
+                "tipo_contratacion": "Contrataciones hasta 8 UIT",
+                "departamento": department,
+                "ruc_proveedor": str(20100000000 + rng.randint(1000000, 9999999)),
+                "proveedor": rng.choice(_DEMO_SUPPLIERS),
+            }
+        )
+    return _normalizar_columnas(pd.DataFrame(records))
+
+
+def _source_descriptor(app_dir: str | Path) -> dict[str, Any]:
+    root = Path(app_dir).resolve()
+    monthly_dir = root / "data" / "processed" / "monthly"
+    monthly_files = sorted(monthly_dir.glob("*.parquet"))
+    if monthly_files:
+        return {
+            "kind": "monthly",
+            "files": monthly_files,
+            "label": "data/processed/monthly/*.parquet",
+            "is_demo": False,
+        }
+
+    parquet_path = root / "data" / "processed" / "ordenes_limpias.parquet"
+    if parquet_path.exists():
+        return {
+            "kind": "parquet",
+            "files": [parquet_path],
+            "label": "data/processed/ordenes_limpias.parquet",
+            "is_demo": False,
+        }
+
+    csv_path = root / "data" / "processed" / "ordenes_muestra.csv"
+    if csv_path.exists():
+        return {
+            "kind": "csv",
+            "files": [csv_path],
+            "label": "data/processed/ordenes_muestra.csv",
+            "is_demo": False,
+        }
+
+    return {
+        "kind": "demo",
+        "files": [],
+        "label": "datos de ejemplo con la estructura de compras públicas",
+        "is_demo": True,
+    }
+
+
+def obtener_firma_fuente(app_dir: str | Path) -> str:
+    """Firma barata para invalidar la caché cuando cambia una fuente."""
+    source = _source_descriptor(app_dir)
+    pieces = [source["kind"]]
+    for path in source["files"]:
+        stat = path.stat()
+        pieces.append(f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}")
+    return hashlib.sha256("|".join(pieces).encode("utf-8")).hexdigest()
+
+
+def _parquet_schema_names(path: Path) -> list[str] | None:
+    try:
+        import pyarrow.parquet as pq
+
+        return list(pq.ParquetFile(path).schema.names)
+    except Exception:
+        return None
+
+
+def _parquet_row_count(path: Path) -> int | None:
+    try:
+        import pyarrow.parquet as pq
+
+        return int(pq.ParquetFile(path).metadata.num_rows)
+    except Exception:
+        return None
+
+
+def _read_parquet_canonical(
+    path: Path,
+    wanted: set[str] | None = None,
+) -> pd.DataFrame:
+    """Lee únicamente columnas necesarias cuando el esquema lo permite."""
+    schema_names = _parquet_schema_names(path)
+    selected: list[str] | None = None
+    if schema_names is not None and wanted:
+        selected = [
+            name
+            for name in schema_names
+            if _canonical_column_name(name) in wanted
+        ]
+        if not selected:
+            selected = None
+    try:
+        frame = pd.read_parquet(path, columns=selected)
+    except (KeyError, ValueError):
+        frame = pd.read_parquet(path)
+    return _normalizar_columnas(frame)
+
+
+def _iter_source_frames(
+    app_dir: str | Path,
+    *,
+    wanted: set[str] | None = None,
+) -> Iterator[pd.DataFrame]:
+    source = _source_descriptor(app_dir)
+    if source["kind"] in {"monthly", "parquet"}:
+        for path in source["files"]:
+            yield _read_parquet_canonical(path, wanted=wanted)
+        return
+    if source["kind"] == "csv":
+        yield _normalizar_columnas(pd.read_csv(source["files"][0]))
+        return
+    yield _build_sample_orders()
+
+
+def obtener_catalogo_mercado(app_dir: str | Path) -> dict[str, Any]:
+    """Devuelve opciones y metadatos sin cargar todas las columnas en cada rerun."""
+    source = _source_descriptor(app_dir)
+    departments: set[str] = set()
+    object_types: set[str] = set()
+    total_records = 0
+    wanted = {"departamento", "objeto_contractual"}
+
+    if source["kind"] == "demo":
+        frames = [_build_sample_orders()]
+    else:
+        frames = []
+        for path in source["files"]:
+            if path.suffix.lower() == ".parquet":
+                count = _parquet_row_count(path)
+                frame = _read_parquet_canonical(path, wanted=wanted)
+                total_records += count if count is not None else len(frame)
+            else:
+                frame = _normalizar_columnas(pd.read_csv(path))
+                total_records += len(frame)
+            frames.append(frame)
+
+    for frame in frames:
+        if source["kind"] == "demo":
+            total_records += len(frame)
+        departments.update(
+            value
+            for value in frame["departamento"].dropna().astype(str)
+            if value and normalizar_texto(value) != "no indicado"
+        )
+        object_types.update(
+            value
+            for value in frame["objeto_contractual"].dropna().astype(str)
+            if value and normalizar_texto(value) != "no indicado"
         )
 
-    return archivos
+    return {
+        "departments": sorted(departments),
+        "object_types": sorted(object_types),
+        "total_records": int(total_records),
+        "source_label": source["label"],
+        "is_demo": bool(source["is_demo"]),
+        "source_kind": source["kind"],
+        "fingerprint": obtener_firma_fuente(app_dir),
+    }
 
 
 def crear_patron_busqueda(palabras_clave: Iterable[str]) -> str:
-    """Crea una expresión regular segura con las palabras indicadas."""
-    palabras_normalizadas = []
-    for palabra in palabras_clave:
-        normalized = normalizar_texto(palabra)
-        if normalized:
-            palabras_normalizadas.append(normalized)
-
-    palabras_unicas = list(dict.fromkeys(palabras_normalizadas))
-    if not palabras_unicas:
+    terms = [
+        normalizar_texto(value)
+        for value in palabras_clave
+        if normalizar_texto(value)
+    ]
+    terms = list(dict.fromkeys(terms))
+    if not terms:
         raise ValueError("Debes indicar al menos una palabra clave válida.")
+    return "|".join(re.escape(term) for term in terms)
 
-    return "|".join(re.escape(palabra) for palabra in palabras_unicas)
 
-
-def _normalizar_filtro(
-    value: str | Iterable[str] | None,
-    *,
-    sentinels: set[str],
-) -> list[str]:
+def _filter_values(value: str | Iterable[str] | None) -> list[str]:
     if value is None:
         return []
-
-    values = [value] if isinstance(value, str) else list(value)
-    normalized: list[str] = []
-    for item in values:
-        term = normalizar_texto(item)
-        if term and term not in sentinels:
-            normalized.append(term)
-    return list(dict.fromkeys(normalized))
+    raw_values = [value] if isinstance(value, str) else list(value)
+    return [normalizar_texto(item) for item in raw_values if normalizar_texto(item)]
 
 
-def _aplicar_filtros(
+def _apply_filters(
     frame: pd.DataFrame,
     *,
-    patron: str,
-    departamento: str | Iterable[str] | None,
-    tipo_orden: str | Iterable[str] | None,
-    objeto_contractual: str | Iterable[str] | None,
+    pattern: str,
+    departments: list[str],
+    order_types: list[str],
+    object_types: list[str],
 ) -> pd.DataFrame:
-    mascara = frame["texto_busqueda"].fillna("").str.contains(
-        patron,
-        case=False,
-        regex=True,
+    mask = frame["texto_busqueda"].fillna("").str.contains(
+        pattern, case=False, regex=True, na=False
     )
 
-    departamentos = _normalizar_filtro(
-        departamento,
-        sentinels={"todo el peru", "todos", "todo"},
-    )
-    if departamentos:
-        normalized_series = frame["departamento"].map(normalizar_texto)
-        mascara &= normalized_series.isin(departamentos)
+    if departments and "todo el peru" not in departments:
+        normalized = frame["departamento"].map(normalizar_texto)
+        mask &= normalized.isin(departments)
 
-    tipos = _normalizar_filtro(
-        tipo_orden,
-        sentinels={"ambos", "todos", "todo"},
-    )
-    if tipos:
-        normalized_series = frame["tipo_orden"].map(normalizar_texto)
-        type_mask = pd.Series(False, index=frame.index)
-        for term in tipos:
-            type_mask |= normalized_series.str.contains(
-                re.escape(term),
-                regex=True,
-                na=False,
-            )
-        mascara &= type_mask
+    if order_types and "ambos" not in order_types:
+        normalized = frame["tipo_orden"].map(normalizar_texto)
+        order_mask = pd.Series(False, index=frame.index)
+        for value in order_types:
+            order_mask |= normalized.str.contains(re.escape(value), regex=True, na=False)
+        mask &= order_mask
 
-    objetos = _normalizar_filtro(
-        objeto_contractual,
-        sentinels={"ambos", "todos", "todo"},
-    )
-    if objetos:
-        normalized_series = frame["objeto_contractual"].map(normalizar_texto)
-        mascara &= normalized_series.isin(objetos)
+    if object_types and "ambos" not in object_types:
+        normalized = frame["objeto_contractual"].map(normalizar_texto)
+        mask &= normalized.isin(object_types)
 
-    return frame.loc[mascara].copy()
+    return frame.loc[mask].copy()
 
 
 def buscar_ordenes(
     palabras_clave: list[str],
     departamento: str | list[str] | None = None,
     tipo_orden: str | list[str] | None = None,
-    objeto_contractual: str | list[str] | None = None,
     *,
-    monthly_dir: str | Path | None = None,
+    departamentos: list[str] | None = None,
+    objetos_contractuales: list[str] | None = None,
+    objeto_contractual: str | list[str] | None = None,
+    app_dir: str | Path = ".",
     datos: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Busca órdenes relacionadas en los Parquet o en un DataFrame de respaldo."""
-    patron = crear_patron_busqueda(palabras_clave)
+    """Busca coincidencias sin mezclar responsabilidades con ``data_service``."""
+    pattern = crear_patron_busqueda(palabras_clave)
+    selected_departments = _filter_values(departamentos or departamento)
+    selected_order_types = _filter_values(tipo_orden)
+    selected_objects = _filter_values(objetos_contractuales or objeto_contractual)
 
-    if datos is not None:
-        frame = _normalizar_columnas(datos)
-        return _aplicar_filtros(
+    frames = [_normalizar_columnas(datos)] if datos is not None else _iter_source_frames(app_dir)
+    results: list[pd.DataFrame] = []
+    for frame in frames:
+        matched = _apply_filters(
             frame,
-            patron=patron,
-            departamento=departamento,
-            tipo_orden=tipo_orden,
-            objeto_contractual=objeto_contractual,
-        ).reset_index(drop=True)
-
-    resultados: list[pd.DataFrame] = []
-    for archivo in obtener_archivos_parquet(monthly_dir):
-        frame = _normalizar_columnas(pd.read_parquet(archivo))
-        missing_order = frame["orden"].eq("")
-        if missing_order.any():
-            generated = [
-                f"{archivo.stem}-{position + 1:06d}"
-                for position in range(len(frame))
-            ]
-            frame.loc[missing_order, "orden"] = pd.Series(
-                generated,
-                index=frame.index,
-            ).loc[missing_order]
-
-        coincidencias = _aplicar_filtros(
-            frame,
-            patron=patron,
-            departamento=departamento,
-            tipo_orden=tipo_orden,
-            objeto_contractual=objeto_contractual,
+            pattern=pattern,
+            departments=selected_departments,
+            order_types=selected_order_types,
+            object_types=selected_objects,
         )
-        if not coincidencias.empty:
-            resultados.append(coincidencias)
+        if not matched.empty:
+            results.append(matched)
 
-    if not resultados:
+    if not results:
         return pd.DataFrame(columns=CANONICAL_COLUMNS)
-
-    return pd.concat(resultados, ignore_index=True)
-
-
-def _mascara_anuladas(resultados: pd.DataFrame) -> pd.Series:
-    if resultados.empty:
-        return pd.Series(False, index=resultados.index, dtype=bool)
-    states = resultados["estado_contratacion"].map(normalizar_texto)
-    return states.str.contains(r"\banulad", regex=True, na=False)
+    return pd.concat(results, ignore_index=True)
 
 
-def calcular_resumen(
-    resultados: pd.DataFrame,
-    *,
-    ordenes_anuladas: int = 0,
-) -> dict[str, Any]:
-    """Calcula las métricas principales del mercado encontrado."""
-    if resultados.empty:
-        return {
-            "total_ordenes": 0,
-            "monto_total_pen": 0.0,
-            "monto_promedio_pen": 0.0,
-            "monto_mediano_pen": 0.0,
-            "total_entidades": 0,
-            "total_proveedores": 0,
-            "ordenes_anuladas": int(ordenes_anuladas),
-            "entidad_principal": None,
-            "periodo_principal": None,
-            "departamento_principal": None,
-        }
-
-    montos = resultados["monto_pen"].dropna()
-    montos = montos[montos >= 0]
-
-    entidades = resultados["entidad"].replace("", pd.NA).dropna().value_counts()
-    periodos = resultados["periodo"].replace("", pd.NA).dropna().value_counts()
-    departamentos = (
-        resultados["departamento"].replace("", pd.NA).dropna().value_counts()
-    )
-    proveedores = resultados["proveedor"].replace("", pd.NA).dropna()
-
-    return {
-        "total_ordenes": int(len(resultados)),
-        "monto_total_pen": float(montos.sum()) if not montos.empty else 0.0,
-        "monto_promedio_pen": float(montos.mean()) if not montos.empty else 0.0,
-        "monto_mediano_pen": float(montos.median()) if not montos.empty else 0.0,
-        "total_entidades": int(resultados["entidad"].nunique(dropna=True)),
-        "total_proveedores": int(proveedores.nunique()),
-        "ordenes_anuladas": int(ordenes_anuladas),
-        "entidad_principal": entidades.index[0] if not entidades.empty else None,
-        "periodo_principal": periodos.index[0] if not periodos.empty else None,
-        "departamento_principal": (
-            departamentos.index[0] if not departamentos.empty else None
-        ),
-    }
-
-
-def obtener_entidades_principales(
-    resultados: pd.DataFrame,
-    limite: int = 10,
-) -> pd.DataFrame:
-    """Devuelve las entidades con más órdenes relacionadas."""
-    if resultados.empty:
-        return pd.DataFrame(
-            columns=[
-                "entidad",
-                "departamento",
-                "cantidad_ordenes",
-                "monto_total_pen",
-            ]
-        )
-
-    return (
-        resultados.groupby(["entidad", "departamento"], dropna=False)
-        .agg(
-            cantidad_ordenes=("orden", "size"),
-            monto_total_pen=("monto_pen", "sum"),
-        )
-        .reset_index()
-        .sort_values(
-            ["cantidad_ordenes", "monto_total_pen"],
-            ascending=[False, False],
-        )
-        .head(limite)
-    )
-
-
-def obtener_tendencia_mensual(resultados: pd.DataFrame) -> pd.DataFrame:
-    """Agrupa los resultados por año y mes."""
-    if resultados.empty:
-        return pd.DataFrame(
-            columns=["periodo", "cantidad_ordenes", "monto_total_pen"]
-        )
-
-    return (
-        resultados.groupby("periodo", dropna=False)
-        .agg(
-            cantidad_ordenes=("orden", "size"),
-            monto_total_pen=("monto_pen", "sum"),
-        )
-        .reset_index()
-        .sort_values("periodo")
-    )
-
-
-def obtener_resumen_departamentos(resultados: pd.DataFrame) -> pd.DataFrame:
-    """Agrupa órdenes, monto y entidades por departamento."""
-    if resultados.empty:
-        return pd.DataFrame(
-            columns=[
-                "departamento",
-                "cantidad_ordenes",
-                "monto_total_pen",
-                "cantidad_entidades",
-            ]
-        )
-
-    return (
-        resultados.groupby("departamento", dropna=False)
-        .agg(
-            cantidad_ordenes=("orden", "size"),
-            monto_total_pen=("monto_pen", "sum"),
-            cantidad_entidades=("entidad", "nunique"),
-        )
-        .reset_index()
-        .sort_values("monto_total_pen", ascending=False)
-    )
-
-
-def obtener_resumen_objetos(resultados: pd.DataFrame) -> pd.DataFrame:
-    """Agrupa las órdenes por objeto contractual."""
-    if resultados.empty:
-        return pd.DataFrame(
-            columns=["objeto_contractual", "cantidad_ordenes", "monto_total_pen"]
-        )
-
-    return (
-        resultados.groupby("objeto_contractual", dropna=False)
-        .agg(
-            cantidad_ordenes=("orden", "size"),
-            monto_total_pen=("monto_pen", "sum"),
-        )
-        .reset_index()
-        .sort_values("cantidad_ordenes", ascending=False)
-    )
-
-
-def _serializable_value(value: Any) -> Any:
-    if value is None or value is pd.NA:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except (TypeError, ValueError):
-        pass
-    if isinstance(value, (pd.Timestamp, datetime, date)):
-        return value.isoformat()
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except (ValueError, TypeError):
-            pass
-    return value
-
-
-def _records_serializables(frame: pd.DataFrame) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    for record in frame.to_dict(orient="records"):
-        records.append(
-            {key: _serializable_value(value) for key, value in record.items()}
-        )
-    return records
+def _legacy_evidence(frame: pd.DataFrame) -> pd.DataFrame:
+    evidence = frame.rename(columns=_CANONICAL_TO_LEGACY).copy()
+    for canonical, legacy in _CANONICAL_TO_LEGACY.items():
+        if legacy not in evidence.columns:
+            evidence[legacy] = _DEFAULTS[canonical]
+    for legacy in [
+        "FECHA_REGISTRO",
+        "FECHA_DE_EMISION",
+        "FECHA_COMPROMISO_PRESUPUESTAL",
+        "FECHA_DE_NOTIFICACION",
+    ]:
+        evidence[legacy] = pd.to_datetime(evidence[legacy], errors="coerce").dt.date
+    return evidence[list(_CANONICAL_TO_LEGACY.values())].copy()
 
 
 def analizar_mercado(
@@ -553,107 +561,95 @@ def analizar_mercado(
     tipo_orden: str | list[str] | None = None,
     limite_entidades: int = 10,
     *,
+    departamentos: list[str] | None = None,
+    objetos_contractuales: list[str] | None = None,
     objeto_contractual: str | list[str] | None = None,
-    monthly_dir: str | Path | None = None,
+    app_dir: str | Path = ".",
     datos: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    """Ejecuta el análisis completo y devuelve datos serializables.
-
-    Esta función es el contrato entre Gemma, la capa de datos y Streamlit.
-    Los cálculos siempre se realizan sobre los registros encontrados; Gemma
-    únicamente interpreta la descripción y redacta el informe.
-    """
-    encontrados = buscar_ordenes(
+    """Ejecuta el análisis completo y devuelve el contrato exacto de ``app.py``."""
+    matched = buscar_ordenes(
         palabras_clave=palabras_clave,
         departamento=departamento,
         tipo_orden=tipo_orden,
+        departamentos=departamentos,
+        objetos_contractuales=objetos_contractuales,
         objeto_contractual=objeto_contractual,
-        monthly_dir=monthly_dir,
+        app_dir=app_dir,
         datos=datos,
     )
 
-    cancelled_mask = _mascara_anuladas(encontrados)
-    anuladas = encontrados.loc[cancelled_mask].copy()
-    resultados = encontrados.loc[~cancelled_mask].copy()
+    if matched.empty:
+        valid = matched.copy()
+        cancelled = matched.copy()
+    else:
+        cancelled_mask = matched["estado_contratacion"].map(normalizar_texto).str.contains(
+            "anulad", regex=False, na=False
+        )
+        cancelled = matched.loc[cancelled_mask].copy()
+        valid = matched.loc[~cancelled_mask].copy()
 
-    resumen = calcular_resumen(
-        resultados,
-        ordenes_anuladas=len(anuladas),
-    )
-    entidades = obtener_entidades_principales(
-        resultados,
-        limite=limite_entidades,
-    )
-    tendencia = obtener_tendencia_mensual(resultados)
-    departamentos = obtener_resumen_departamentos(resultados)
-    objetos = obtener_resumen_objetos(resultados)
+    if not valid.empty:
+        valid["periodo"] = valid["periodo"].where(
+            valid["periodo"].ne(""),
+            valid["fecha_emision"].dt.to_period("M").astype(str).replace("NaT", ""),
+        )
 
-    ejemplos = (
-        resultados.sort_values("monto_pen", ascending=False).head(10)
-        if not resultados.empty
-        else resultados
+    entities = (
+        valid.groupby(["entidad", "departamento"], as_index=False)
+        .agg(
+            ordenes=("orden", "count"),
+            monto_total=("monto_pen", "sum"),
+        )
+        .sort_values(["ordenes", "monto_total"], ascending=False)
+        .head(limite_entidades)
+        .rename(columns={"entidad": "ENTIDAD", "departamento": "DEPARTAMENTO"})
+    )
+
+    monthly = (
+        valid.groupby("periodo", as_index=False)
+        .agg(ordenes=("orden", "count"), monto_total=("monto_pen", "sum"))
+        .sort_values("periodo")
+        .rename(columns={"periodo": "MES"})
+    )
+
+    departments_summary = (
+        valid.groupby("departamento", as_index=False)
+        .agg(
+            ordenes=("orden", "count"),
+            monto_total=("monto_pen", "sum"),
+            entidades=("entidad", "nunique"),
+        )
+        .sort_values("monto_total", ascending=False)
+        .rename(columns={"departamento": "DEPARTAMENTO"})
+    )
+
+    objects = (
+        valid.groupby("objeto_contractual", as_index=False)
+        .agg(ordenes=("orden", "count"), monto_total=("monto_pen", "sum"))
+        .sort_values("ordenes", ascending=False)
+        .rename(columns={"objeto_contractual": "OBJETOCONTRACTUAL"})
+    )
+
+    peak_month = (
+        str(monthly.loc[monthly["ordenes"].idxmax(), "MES"])
+        if not monthly.empty
+        else "Sin datos"
     )
 
     return {
-        "consulta": {
-            "palabras_clave": list(palabras_clave),
-            "departamento": departamento or "Todo el Perú",
-            "tipo_orden": tipo_orden or "Ambos",
-            "objeto_contractual": objeto_contractual or "Ambos",
+        "keywords": list(palabras_clave),
+        "summary": {
+            "total_orders": int(len(valid)),
+            "total_amount": float(valid["monto_pen"].sum()) if not valid.empty else 0.0,
+            "entity_count": int(valid["entidad"].nunique()) if not valid.empty else 0,
+            "supplier_count": int(valid["proveedor"].nunique()) if not valid.empty else 0,
+            "peak_month": peak_month,
+            "cancelled_orders": int(len(cancelled)),
         },
-        "resumen": resumen,
-        "entidades_principales": _records_serializables(entidades),
-        "tendencia_mensual": _records_serializables(tendencia),
-        "departamentos": _records_serializables(departamentos),
-        "objetos_contractuales": _records_serializables(objetos),
-        "ordenes_evidencia": _records_serializables(resultados),
-        "ordenes_ejemplo": _records_serializables(ejemplos),
+        "entities": entities,
+        "monthly": monthly,
+        "departments": departments_summary,
+        "objects": objects,
+        "evidence": _legacy_evidence(valid),
     }
-
-
-def obtener_catalogo_mercado(
-    monthly_dir: str | Path | None = None,
-) -> dict[str, Any]:
-    """Obtiene opciones y volumen de la fuente sin conservar todos los registros."""
-    departments: set[str] = set()
-    objects: set[str] = set()
-    total = 0
-    files = obtener_archivos_parquet(monthly_dir)
-
-    for archivo in files:
-        frame = _normalizar_columnas(pd.read_parquet(archivo))
-        total += len(frame)
-        departments.update(
-            value
-            for value in frame["departamento"].dropna().astype(str)
-            if value and value != "No indicado"
-        )
-        objects.update(
-            value
-            for value in frame["objeto_contractual"].dropna().astype(str)
-            if value and value != "No indicado"
-        )
-
-    return {
-        "total_registros": int(total),
-        "departamentos": sorted(departments),
-        "objetos_contractuales": sorted(objects),
-        "archivos": [str(path) for path in files],
-    }
-
-
-if __name__ == "__main__":
-    resultado = analizar_mercado(
-        palabras_clave=[
-            "servicio de limpieza",
-            "limpieza de oficinas",
-            "pintado de ambientes",
-            "mantenimiento de locales",
-        ],
-        departamento="Lima",
-        tipo_orden="servicio",
-    )
-
-    print("\nRESUMEN")
-    for clave, valor in resultado["resumen"].items():
-        print(f"- {clave}: {valor}")

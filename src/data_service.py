@@ -1,24 +1,12 @@
-"""Servicios de compatibilidad y preparación de datos para MYPE Radar.
-
-``analytics.analizar_mercado`` es el motor principal. Este módulo mantiene
-las utilidades históricas de la aplicación y adapta el resultado normalizado
-al formato que ya consume la interfaz Streamlit.
-"""
-
 from __future__ import annotations
 
 import random
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-
-from .analytics import (
-    analizar_mercado,
-    normalizar_texto,
-    obtener_catalogo_mercado,
-)
 
 
 STOPWORDS = {
@@ -98,12 +86,19 @@ SUPPLIERS = [
 
 
 def normalize_text(value: Any) -> str:
-    """Alias histórico de la normalización utilizada por analytics."""
-    return normalizar_texto(value)
+    text = "" if value is None else str(value)
+    normalized = unicodedata.normalize("NFKD", text)
+    normalized = "".join(
+        character
+        for character in normalized
+        if not unicodedata.combining(character)
+    )
+    normalized = normalized.lower()
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def extract_keywords(description: str, manual_terms: str) -> list[str]:
-    """Extrae términos locales y respeta primero los términos manuales."""
     manual = [
         term.strip()
         for term in re.split(r"[,;\n]+", manual_terms or "")
@@ -122,7 +117,6 @@ def extract_keywords(description: str, manual_terms: str) -> list[str]:
 
 
 def build_sample_orders(rows: int = 420) -> pd.DataFrame:
-    """Genera datos demostrativos con el esquema histórico de la interfaz."""
     rng = random.Random(2026)
     records = []
 
@@ -191,7 +185,6 @@ def build_sample_orders(rows: int = 420) -> pd.DataFrame:
 
 
 def prepare_orders(dataframe: pd.DataFrame) -> pd.DataFrame:
-    """Completa y tipa el esquema histórico esperado por la UI."""
     data = dataframe.copy()
 
     required_defaults = {
@@ -261,194 +254,33 @@ def prepare_orders(dataframe: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def _catalog_frame(catalog: dict[str, Any]) -> pd.DataFrame:
-    departments = list(catalog.get("departamentos", []))
-    object_types = list(catalog.get("objetos_contractuales", []))
-    row_count = max(len(departments), len(object_types), 1)
-
-    departments += [None] * (row_count - len(departments))
-    object_types += [None] * (row_count - len(object_types))
-    frame = pd.DataFrame(
-        {
-            "DEPARTAMENTO": departments,
-            "OBJETOCONTRACTUAL": object_types,
-        }
-    )
-    frame.attrs["total_records"] = int(catalog.get("total_registros", 0))
-    frame.attrs["source_type"] = "monthly"
-    return frame
-
-
 def load_orders(app_dir: Path) -> tuple[pd.DataFrame, str, bool]:
-    """Carga el catálogo mensual o las fuentes históricas de respaldo.
-
-    Cuando existen Parquet mensuales se devuelve un DataFrame liviano para
-    poblar filtros. El análisis real se ejecuta después con ``analizar_mercado``.
-    """
-    monthly_dir = app_dir / "data" / "processed" / "monthly"
-    if any(monthly_dir.glob("*.parquet")):
-        catalog = obtener_catalogo_mercado(monthly_dir)
-        frame = _catalog_frame(catalog)
-        frame.attrs["monthly_dir"] = str(monthly_dir)
-        return (
-            frame,
-            "data/processed/monthly/*.parquet",
-            False,
-        )
-
     parquet_path = (
         app_dir / "data" / "processed" / "ordenes_limpias.parquet"
     )
     csv_path = app_dir / "data" / "processed" / "ordenes_muestra.csv"
 
     if parquet_path.exists():
-        dataframe = prepare_orders(pd.read_parquet(parquet_path))
-        dataframe.attrs["total_records"] = len(dataframe)
-        dataframe.attrs["source_type"] = "single"
+        dataframe = pd.read_parquet(parquet_path)
         return (
-            dataframe,
+            prepare_orders(dataframe),
             "data/processed/ordenes_limpias.parquet",
             False,
         )
 
     if csv_path.exists():
-        dataframe = prepare_orders(pd.read_csv(csv_path))
-        dataframe.attrs["total_records"] = len(dataframe)
-        dataframe.attrs["source_type"] = "single"
+        dataframe = pd.read_csv(csv_path)
         return (
-            dataframe,
+            prepare_orders(dataframe),
             "data/processed/ordenes_muestra.csv",
             False,
         )
 
-    dataframe = prepare_orders(build_sample_orders())
-    dataframe.attrs["total_records"] = len(dataframe)
-    dataframe.attrs["source_type"] = "demo"
     return (
-        dataframe,
+        prepare_orders(build_sample_orders()),
         "datos de ejemplo con la estructura del diccionario de compras",
         True,
     )
-
-
-def source_record_count(orders: pd.DataFrame) -> int:
-    """Devuelve el volumen real aunque ``orders`` sea solo un catálogo."""
-    return int(orders.attrs.get("total_records", len(orders)))
-
-
-_CANONICAL_TO_LEGACY = {
-    "entidad": "ENTIDAD",
-    "ruc_entidad": "RUC_ENTIDAD",
-    "fecha_registro": "FECHA_REGISTRO",
-    "fecha_emision": "FECHA_DE_EMISION",
-    "fecha_compromiso_presupuestal": "FECHA_COMPROMISO_PRESUPUESTAL",
-    "fecha_notificacion": "FECHA_DE_NOTIFICACION",
-    "tipo_orden": "TIPOORDEN",
-    "numero_orden": "NRO_DE_ORDEN",
-    "orden": "ORDEN",
-    "descripcion": "DESCRIPCION_ORDEN",
-    "moneda": "MONEDA",
-    "monto_pen": "MONTO_TOTAL_ORDEN_ORIGINAL",
-    "objeto_contractual": "OBJETOCONTRACTUAL",
-    "estado_contratacion": "ESTADOCONTRATACION",
-    "tipo_contratacion": "TIPODECONTRATACION",
-    "departamento": "DEPARTAMENTO",
-    "ruc_proveedor": "RUC_CONTRATISTA",
-    "proveedor": "NOMBRE_RAZON_CONTRATISTA",
-}
-
-
-def _frame(records: Any, columns: list[str]) -> pd.DataFrame:
-    frame = pd.DataFrame(records or [])
-    for column in columns:
-        if column not in frame.columns:
-            frame[column] = pd.Series(dtype="object")
-    return frame[columns].copy()
-
-
-def adapt_analytics_result(payload: dict[str, Any]) -> dict[str, Any]:
-    """Adapta ``analizar_mercado`` al contrato histórico de ``app.py``."""
-    resumen = payload.get("resumen", {})
-    consulta = payload.get("consulta", {})
-
-    entities = _frame(
-        payload.get("entidades_principales"),
-        ["entidad", "departamento", "cantidad_ordenes", "monto_total_pen"],
-    ).rename(
-        columns={
-            "entidad": "ENTIDAD",
-            "departamento": "DEPARTAMENTO",
-            "cantidad_ordenes": "ordenes",
-            "monto_total_pen": "monto_total",
-        }
-    )
-
-    monthly = _frame(
-        payload.get("tendencia_mensual"),
-        ["periodo", "cantidad_ordenes", "monto_total_pen"],
-    ).rename(
-        columns={
-            "periodo": "MES",
-            "cantidad_ordenes": "ordenes",
-            "monto_total_pen": "monto_total",
-        }
-    )
-
-    departments = _frame(
-        payload.get("departamentos"),
-        [
-            "departamento",
-            "cantidad_ordenes",
-            "monto_total_pen",
-            "cantidad_entidades",
-        ],
-    ).rename(
-        columns={
-            "departamento": "DEPARTAMENTO",
-            "cantidad_ordenes": "ordenes",
-            "monto_total_pen": "monto_total",
-            "cantidad_entidades": "entidades",
-        }
-    )
-
-    objects = _frame(
-        payload.get("objetos_contractuales"),
-        ["objeto_contractual", "cantidad_ordenes", "monto_total_pen"],
-    ).rename(
-        columns={
-            "objeto_contractual": "OBJETOCONTRACTUAL",
-            "cantidad_ordenes": "ordenes",
-            "monto_total_pen": "monto_total",
-        }
-    )
-
-    evidence = pd.DataFrame(payload.get("ordenes_evidencia") or [])
-    evidence = evidence.rename(columns=_CANONICAL_TO_LEGACY)
-    evidence = prepare_orders(evidence)
-
-    keywords = [
-        str(term)
-        for term in consulta.get("palabras_clave", [])
-        if str(term).strip()
-    ]
-
-    return {
-        "keywords": keywords,
-        "summary": {
-            "total_orders": int(resumen.get("total_ordenes", 0) or 0),
-            "total_amount": float(resumen.get("monto_total_pen", 0.0) or 0.0),
-            "entity_count": int(resumen.get("total_entidades", 0) or 0),
-            "supplier_count": int(resumen.get("total_proveedores", 0) or 0),
-            "peak_month": resumen.get("periodo_principal") or "Sin datos",
-            "cancelled_orders": int(resumen.get("ordenes_anuladas", 0) or 0),
-        },
-        "entities": entities,
-        "monthly": monthly,
-        "departments": departments,
-        "objects": objects,
-        "evidence": evidence,
-        "market_payload": payload,
-    }
 
 
 def analyze_orders(
@@ -458,85 +290,168 @@ def analyze_orders(
     departments: list[str] | None = None,
     object_types: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Compatibilidad: ejecuta el motor nuevo sobre un DataFrame histórico."""
-    payload = analizar_mercado(
-        palabras_clave=keywords,
-        departamento=departments,
-        objeto_contractual=object_types,
-        datos=orders,
+    normalized_keywords = [
+        normalize_text(keyword)
+        for keyword in keywords
+        if normalize_text(keyword)
+    ]
+
+    if not normalized_keywords:
+        raise ValueError("Se requiere al menos una palabra clave.")
+
+    mask = pd.Series(False, index=orders.index)
+    for keyword in normalized_keywords:
+        mask = mask | orders["_DESCRIPTION_NORMALIZED"].str.contains(
+            re.escape(keyword),
+            case=False,
+            na=False,
+            regex=True,
+        )
+
+    matched = orders[mask].copy()
+
+    if departments:
+        matched = matched[
+            matched["DEPARTAMENTO"].isin(departments)
+        ]
+
+    if object_types:
+        matched = matched[
+            matched["OBJETOCONTRACTUAL"].isin(object_types)
+        ]
+
+    cancelled = matched[
+        matched["ESTADOCONTRATACION"].str.lower() == "anulada"
+    ].copy()
+    valid = matched[
+        matched["ESTADOCONTRATACION"].str.lower() != "anulada"
+    ].copy()
+
+    if not valid.empty:
+        valid["MES"] = (
+            pd.to_datetime(valid["FECHA_DE_EMISION"], errors="coerce")
+            .dt.to_period("M")
+            .astype(str)
+        )
+    else:
+        valid["MES"] = pd.Series(dtype="string")
+
+    entities = (
+        valid.groupby(["ENTIDAD", "DEPARTAMENTO"], as_index=False)
+        .agg(
+            ordenes=("ORDEN", "count"),
+            monto_total=("MONTO_TOTAL_ORDEN_ORIGINAL", "sum"),
+        )
+        .sort_values(
+            ["ordenes", "monto_total"],
+            ascending=False,
+        )
     )
-    return adapt_analytics_result(payload)
 
+    monthly = (
+        valid.groupby("MES", as_index=False)
+        .agg(
+            ordenes=("ORDEN", "count"),
+            monto_total=("MONTO_TOTAL_ORDEN_ORIGINAL", "sum"),
+        )
+        .sort_values("MES")
+    )
 
-def _records_for_context(
-    frame: pd.DataFrame,
-    columns: list[str],
-    *,
-    limit: int = 10,
-) -> list[dict[str, Any]]:
-    if frame.empty:
-        return []
-    selected = frame[[column for column in columns if column in frame.columns]]
-    selected = selected.head(limit).copy()
-    for column in selected.columns:
-        if pd.api.types.is_datetime64_any_dtype(selected[column]):
-            selected[column] = selected[column].astype(str)
-        elif selected[column].dtype == "object":
-            selected[column] = selected[column].map(
-                lambda value: value.isoformat()
-                if hasattr(value, "isoformat")
-                else value
-            )
-    return selected.where(pd.notna(selected), None).to_dict(orient="records")
+    departments_summary = (
+        valid.groupby("DEPARTAMENTO", as_index=False)
+        .agg(
+            ordenes=("ORDEN", "count"),
+            monto_total=("MONTO_TOTAL_ORDEN_ORIGINAL", "sum"),
+            entidades=("ENTIDAD", "nunique"),
+        )
+        .sort_values("monto_total", ascending=False)
+    )
+
+    objects = (
+        valid.groupby("OBJETOCONTRACTUAL", as_index=False)
+        .agg(
+            ordenes=("ORDEN", "count"),
+            monto_total=("MONTO_TOTAL_ORDEN_ORIGINAL", "sum"),
+        )
+    )
+
+    peak_month = (
+        str(monthly.loc[monthly["ordenes"].idxmax(), "MES"])
+        if not monthly.empty
+        else "Sin datos"
+    )
+
+    return {
+        "keywords": keywords,
+        "summary": {
+            "total_orders": int(len(valid)),
+            "total_amount": float(
+                valid["MONTO_TOTAL_ORDEN_ORIGINAL"].sum()
+            ),
+            "entity_count": int(valid["ENTIDAD"].nunique()),
+            "supplier_count": int(
+                valid["NOMBRE_RAZON_CONTRATISTA"].nunique()
+            ),
+            "peak_month": peak_month,
+            "cancelled_orders": int(len(cancelled)),
+        },
+        "entities": entities,
+        "monthly": monthly,
+        "departments": departments_summary,
+        "objects": objects,
+        "evidence": valid,
+    }
 
 
 def build_report_context(
     analysis: dict[str, Any],
     *,
-    business_description: str,
+    business_description: str = "",
     categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Construye un contexto compacto; no envía toda la evidencia a Gemma."""
+    """Convierte el análisis en un contexto compacto y serializable para Gemma.
+
+    La evidencia fila por fila no se incluye para evitar prompts excesivos. El informe
+    recibe únicamente agregados ya calculados por ``analyze_orders``.
+    """
+
+    def records(
+        frame: Any,
+        columns: list[str],
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return []
+        available = [column for column in columns if column in frame.columns]
+        selected = frame[available]
+        if limit is not None:
+            selected = selected.head(limit)
+        return selected.to_dict(orient="records")
+
+    summary = dict(analysis.get("summary", {}))
     return {
-        "descripcion_empresa": (business_description or "").strip(),
+        "descripcion_mype": (business_description or "").strip(),
         "categorias_interpretadas": list(categories or []),
         "palabras_clave_utilizadas": list(analysis.get("keywords", [])),
-        "resumen": dict(analysis.get("summary", {})),
-        "entidades_principales": _records_for_context(
-            analysis.get("entities", pd.DataFrame()),
+        "resumen": summary,
+        "entidades_principales": records(
+            analysis.get("entities"),
             ["ENTIDAD", "DEPARTAMENTO", "ordenes", "monto_total"],
+            limit=5,
         ),
-        "tendencia_mensual": _records_for_context(
-            analysis.get("monthly", pd.DataFrame()),
+        "actividad_mensual": records(
+            analysis.get("monthly"),
             ["MES", "ordenes", "monto_total"],
             limit=24,
         ),
-        "departamentos_principales": _records_for_context(
-            analysis.get("departments", pd.DataFrame()),
+        "departamentos_principales": records(
+            analysis.get("departments"),
             ["DEPARTAMENTO", "ordenes", "monto_total", "entidades"],
+            limit=10,
         ),
-        "objetos_contractuales": _records_for_context(
-            analysis.get("objects", pd.DataFrame()),
+        "objetos_contractuales": records(
+            analysis.get("objects"),
             ["OBJETOCONTRACTUAL", "ordenes", "monto_total"],
-        ),
-        "ordenes_ejemplo": _records_for_context(
-            analysis.get("evidence", pd.DataFrame()).sort_values(
-                "MONTO_TOTAL_ORDEN_ORIGINAL",
-                ascending=False,
-            )
-            if not analysis.get("evidence", pd.DataFrame()).empty
-            else pd.DataFrame(),
-            [
-                "ENTIDAD",
-                "DEPARTAMENTO",
-                "TIPOORDEN",
-                "DESCRIPCION_ORDEN",
-                "MONTO_TOTAL_ORDEN_ORIGINAL",
-                "FECHA_DE_EMISION",
-            ],
-        ),
-        "advertencia": (
-            "Son órdenes históricas del mercado público, no ventas de la MYPE "
-            "ni oportunidades activas."
         ),
     }
