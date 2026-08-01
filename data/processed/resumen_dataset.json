@@ -1,0 +1,76 @@
+{
+  "cantidad_archivos": 7,
+  "total_filas_limpias": 1726050,
+  "archivos": [
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAABRIL2026_0.xlsx",
+      "filas_limpias": 255043,
+      "entidades": 1304,
+      "departamentos": 25,
+      "monto_pen_total": 3316377394.5784,
+      "periodos": [
+        "2026-04"
+      ]
+    },
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAENERO2026_0.xlsx",
+      "filas_limpias": 310334,
+      "entidades": 1375,
+      "departamentos": 25,
+      "monto_pen_total": 3781731607.0214996,
+      "periodos": [
+        "2026-01"
+      ]
+    },
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAFEBRERO2026_0.xlsx",
+      "filas_limpias": 196549,
+      "entidades": 1232,
+      "departamentos": 25,
+      "monto_pen_total": 4071018969.7283,
+      "periodos": [
+        "2026-02"
+      ]
+    },
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAJULIO2026_0.xlsx",
+      "filas_limpias": 227389,
+      "entidades": 1282,
+      "departamentos": 25,
+      "monto_pen_total": 3048008836.6935997,
+      "periodos": [
+        "2026-07"
+      ]
+    },
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAJUNIO2026_0.xlsx",
+      "filas_limpias": 249981,
+      "entidades": 1309,
+      "departamentos": 25,
+      "monto_pen_total": 4003587829.9319,
+      "periodos": [
+        "2026-06"
+      ]
+    },
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAMARZO2026_0.xlsx",
+      "filas_limpias": 249093,
+      "entidades": 1292,
+      "departamentos": 25,
+      "monto_pen_total": 4914789892.107,
+      "periodos": [
+        "2026-03"
+      ]
+    },
+    {
+      "archivo": "CONOSCE_ORDENESCOMPRAMAYO2026_0.xlsx",
+      "filas_limpias": 237661,
+      "entidades": 1274,
+      "departamentos": 25,
+      "monto_pen_total": 3644398815.7648,
+      "periodos": [
+        "2026-05"
+      ]
+    }
+  ]
+}
