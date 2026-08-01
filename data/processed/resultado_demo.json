@@ -1,0 +1,192 @@
+{
+  "consulta": {
+    "palabras_clave": [
+      "servicio de limpieza",
+      "limpieza de oficinas",
+      "pintado de ambientes",
+      "mantenimiento de locales"
+    ],
+    "departamento": "Lima",
+    "tipo_orden": "servicio"
+  },
+  "resumen": {
+    "total_ordenes": 6259,
+    "monto_total_pen": 360970766.07320005,
+    "monto_promedio_pen": 57672.27449643714,
+    "monto_mediano_pen": 2842.58,
+    "entidad_principal": "MUNICIPALIDAD DISTRITAL DE PUENTE PIEDRA",
+    "periodo_principal": "2026-03",
+    "departamento_principal": "LIMA"
+  },
+  "entidades_principales": [
+    {
+      "entidad": "MUNICIPALIDAD DISTRITAL DE PUENTE PIEDRA",
+      "cantidad_ordenes": 426,
+      "monto_total_pen": 8337559.6
+    },
+    {
+      "entidad": "INSTITUTO DE MEDICINA LEGAL Y CIENCIAS FORENSES",
+      "cantidad_ordenes": 372,
+      "monto_total_pen": 1017320.0
+    },
+    {
+      "entidad": "MUNICIPALIDAD DISTRITAL DE LOS OLIVOS (LAS PALMERAS)",
+      "cantidad_ordenes": 351,
+      "monto_total_pen": 526214.0
+    },
+    {
+      "entidad": "DIRECCION DE REDES INTEGRADAS DE SALUD LIMA ESTE",
+      "cantidad_ordenes": 344,
+      "monto_total_pen": 1236016.67
+    },
+    {
+      "entidad": "DIRECCION DE REDES INTEGRADAS DE SALUD LIMA SUR",
+      "cantidad_ordenes": 330,
+      "monto_total_pen": 1034640.0
+    },
+    {
+      "entidad": "MINISTERIO PUBLICO",
+      "cantidad_ordenes": 244,
+      "monto_total_pen": 819373.94
+    },
+    {
+      "entidad": "AUTORIDAD NACIONAL DEL AGUA",
+      "cantidad_ordenes": 200,
+      "monto_total_pen": 2463577.79
+    },
+    {
+      "entidad": "MINISTERIO DE ECONOMIA Y FINANZAS",
+      "cantidad_ordenes": 166,
+      "monto_total_pen": 1901362.18
+    },
+    {
+      "entidad": "POLICÍA NACIONAL DEL PERÚ - DIRECCIÓN DE SANIDAD",
+      "cantidad_ordenes": 151,
+      "monto_total_pen": 12077906.040000001
+    },
+    {
+      "entidad": "UNIDAD EJECUTORA Nº 006 - INSTITUTO NACIONAL DE BIENESTAR FAMILIAR",
+      "cantidad_ordenes": 142,
+      "monto_total_pen": 632000.0
+    }
+  ],
+  "tendencia_mensual": [
+    {
+      "periodo": "2026-01",
+      "cantidad_ordenes": 979,
+      "monto_total_pen": 13059346.5937
+    },
+    {
+      "periodo": "2026-02",
+      "cantidad_ordenes": 1052,
+      "monto_total_pen": 122917115.0607
+    },
+    {
+      "periodo": "2026-03",
+      "cantidad_ordenes": 1155,
+      "monto_total_pen": 84617555.2208
+    },
+    {
+      "periodo": "2026-04",
+      "cantidad_ordenes": 921,
+      "monto_total_pen": 43584439.02
+    },
+    {
+      "periodo": "2026-05",
+      "cantidad_ordenes": 593,
+      "monto_total_pen": 56722383.5244
+    },
+    {
+      "periodo": "2026-06",
+      "cantidad_ordenes": 921,
+      "monto_total_pen": 18529692.3556
+    },
+    {
+      "periodo": "2026-07",
+      "cantidad_ordenes": 638,
+      "monto_total_pen": 21540234.298
+    }
+  ],
+  "ordenes_ejemplo": [
+    {
+      "entidad": "DIRECCION DE REDES INTEGRADAS DE SALUD LIMA NORTE",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "SERVICIO DE LIMPIEZA, DESINFECCIÓN Y SANEAMIENTO AMBIENTAL DE AMBIENTES DE LOS ESTABLECIMIENTOS",
+      "monto_pen": 11600000.0,
+      "periodo": "2026-05"
+    },
+    {
+      "entidad": "MINISTERIO DE SALUD",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "SERVICIO DE LIMPIEZA Y JARDINERIA PARA LA SEDE CENTRAL Y DEPENDENDCIAS DEL MINISTERIO DE SALUD",
+      "monto_pen": 9895768.0,
+      "periodo": "2026-03"
+    },
+    {
+      "entidad": "AUTORIDAD DE TRANSPORTE URBANO PARA LIMA Y CALLAO",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "CONTRATO PRINCIPAL- SERVICIO DE LIMPIEZA INTEGRAL PARA EL COSAC I DE LA SUBDIRECCIÓN DE SERVICIOS DE TRANSPORTE REGULAR DE LA ATU",
+      "monto_pen": 9881880.04,
+      "periodo": "2026-03"
+    },
+    {
+      "entidad": "EMPRESA MUNICIPAL DE MERCADOS S.A.",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "SERVICIO DE LIMPIEZA INTEGRAL, RECOJO, TRANSPORTE Y DISPOSICIÓN FINAL DE RESIDUOS SÓLIDOS EN EL GMML",
+      "monto_pen": 9671608.06,
+      "periodo": "2026-02"
+    },
+    {
+      "entidad": "EMPRESA MUNICIPAL DE MERCADOS S.A.",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "SERVICIO DE LIMPIEZA INTEGRAL, RECOJO, TRANSPORTE Y DISPOSICIÓN FINAL DE RESIDUOS SÓLIDOS EN EL GMML",
+      "monto_pen": 9671607.81,
+      "periodo": "2026-02"
+    },
+    {
+      "entidad": "POLICÍA NACIONAL DEL PERÚ - DIRECCIÓN DE SANIDAD",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "LNS_CANJE PREV. N° 67 - SERVICIO DE LIMPIEZA Y DESINFECCION DE LOCALES - SERVICIOS GENERALES",
+      "monto_pen": 8551517.81,
+      "periodo": "2026-04"
+    },
+    {
+      "entidad": "MUNICIPALIDAD METROPOLITANA DE LIMA",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "Servicio De Limpieza De Locales",
+      "monto_pen": 7200798.96,
+      "periodo": "2026-02"
+    },
+    {
+      "entidad": "DIRECCION DE REDES INTEGRADAS DE SALUD LIMA NORTE",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "SERVICIO DE LIMPIEZA, DESINFECCIÓN Y SANEAMIENTO AMBIENTAL DE AMBIENTES DE LOS ESTABLECIMIENTOS",
+      "monto_pen": 6800000.0,
+      "periodo": "2026-05"
+    },
+    {
+      "entidad": "MINISTERIO DE EDUCACION",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "MNT2025-INT-0747837 SERVICIO DE LIMPIEZA Y MANTENIMIENTO DE LA SEDE CENTRAL Y LOCALES ANEXOS DEL",
+      "monto_pen": 6409366.15,
+      "periodo": "2026-02"
+    },
+    {
+      "entidad": "UNIVERSIDAD NACIONAL FEDERICO VILLARREAL",
+      "departamento": "LIMA",
+      "tipo_orden": "Orden de Servicio",
+      "descripcion": "SERVICIO DE LIMPIEZA Y MANTENIMIENTO DE LOS LOCALES DE LA UNFV",
+      "monto_pen": 5959338.6,
+      "periodo": "2026-02"
+    }
+  ]
+}
