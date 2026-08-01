@@ -571,6 +571,8 @@ def analizar_mercado(
     matched = buscar_ordenes(
         palabras_clave=palabras_clave,
         departamento=departamento,
+        objeto_contractual=objeto_contractual,
+        datos=datos,
         tipo_orden=tipo_orden,
         departamentos=departamentos,
         objetos_contractuales=objetos_contractuales,
