@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,16 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from src.data_service import analyze_orders, extract_keywords, load_orders
+from src.analytics import analizar_mercado
+from src.data_service import (
+    adapt_analytics_result,
+    build_report_context,
+    extract_keywords,
+    load_orders,
+    source_record_count,
+)
+from src.gemma_agent import GemmaAgentError, analizar_negocio
+from src.report_generator import ReportGenerationError, generar_informe
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -719,6 +729,124 @@ buscador de procesos activos.
 """.strip()
 
 
+def _term_key(value: str) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def _deduplicate_terms(values: list[str], *, limit: int = 12) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        term = str(value).strip()
+        key = _term_key(term)
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
+def resolve_business_terms(
+    profile: str,
+    keywords_text: str,
+) -> tuple[list[str], list[str], str, str | None]:
+    """Resuelve términos con Gemma y conserva el control manual del usuario."""
+    automatic_terms = extract_keywords(profile, "")
+    entered_terms = extract_keywords("", keywords_text)
+    entered_keys = {_term_key(term) for term in entered_terms}
+    automatic_keys = {_term_key(term) for term in automatic_terms}
+    has_manual_override = bool(entered_terms) and entered_keys != automatic_keys
+
+    categories: list[str] = []
+    gemma_terms: list[str] = []
+    gemma_error: str | None = None
+
+    if (profile or "").strip():
+        try:
+            profile_analysis = analizar_negocio(profile)
+            categories = _deduplicate_terms(
+                profile_analysis.get("categorias", []),
+                limit=4,
+            )
+            gemma_terms = _deduplicate_terms(
+                profile_analysis.get("palabras_clave", []),
+                limit=10,
+            )
+        except GemmaAgentError as exc:
+            gemma_error = str(exc)
+        except Exception as exc:
+            gemma_error = f"Error inesperado al consultar Gemma: {exc}"
+
+    if has_manual_override:
+        return entered_terms, categories, "manual", gemma_error
+    if gemma_terms:
+        return gemma_terms, categories, "gemma", gemma_error
+
+    fallback_terms = entered_terms or automatic_terms
+    return _deduplicate_terms(fallback_terms), categories, "local", gemma_error
+
+
+def _ensure_report_scope(report: str) -> str:
+    cleaned = (report or "").strip()
+    if "### Alcance" in cleaned:
+        return cleaned
+    scope = (
+        "### Alcance\n\n"
+        "Este análisis utiliza registros históricos y agregados verificables en la "
+        "pestaña Evidencia. No constituye una predicción, una oportunidad activa ni "
+        "una garantía de contratación."
+    )
+    return f"{cleaned}\n\n{scope}" if cleaned else scope
+
+
+def generate_analysis_report(
+    analysis: dict[str, Any],
+    *,
+    profile: str,
+    categories: list[str],
+) -> tuple[str, str, str | None]:
+    """Genera el informe con Gemma y usa el informe local como respaldo seguro."""
+    context = build_report_context(
+        analysis,
+        business_description=profile,
+        categories=categories,
+    )
+    try:
+        report = generar_informe(context)
+        return _ensure_report_scope(report), "gemma", None
+    except ReportGenerationError as exc:
+        return build_report(analysis), "local", str(exc)
+    except Exception as exc:
+        error = f"Error inesperado al generar el informe: {exc}"
+        return build_report(analysis), "local", error
+
+
+def run_market_analysis(
+    orders: pd.DataFrame,
+    *,
+    keywords: list[str],
+    departments: list[str],
+    object_types: list[str],
+) -> dict[str, Any]:
+    """Ejecuta analytics.analizar_mercado y adapta su salida a la UI actual."""
+    monthly_dir = orders.attrs.get("monthly_dir")
+    kwargs: dict[str, Any] = {
+        "palabras_clave": keywords,
+        "departamento": departments or None,
+        "objeto_contractual": object_types or None,
+    }
+
+    if monthly_dir:
+        kwargs["monthly_dir"] = Path(str(monthly_dir))
+    else:
+        kwargs["datos"] = orders
+
+    market_payload = analizar_mercado(**kwargs)
+    return adapt_analytics_result(market_payload)
+
+
 def inject_workspace_styles() -> None:
     """Estilos exclusivos del panel; no se cargan en la página de inicio."""
     st.markdown(
@@ -1203,9 +1331,10 @@ def render_business_tab(
             with keyword_help:
                 with st.popover("Ayuda", use_container_width=True):
                     st.write(
-                        "La versión actual busca estas palabras dentro de "
-                        "`DESCRIPCION_ORDEN`. Puedes eliminarlas, corregirlas o agregar "
-                        "sinónimos. No se está simulando una respuesta de Gemma."
+                        "Gemma interpreta la descripción y propone términos para buscar "
+                        "dentro de `DESCRIPCION_ORDEN`. Puedes mantener, eliminar o "
+                        "reemplazar los términos del campo. Si Gemma no está disponible, "
+                        "la aplicación conserva la extracción local como respaldo."
                     )
 
             if suggested and not st.session_state.get("keywords_text"):
@@ -1240,7 +1369,7 @@ def render_business_tab(
             )
 
             st.divider()
-            st.caption(f"Registros disponibles en la fuente: {len(orders):,}")
+            st.caption(f"Registros disponibles en la fuente: {source_record_count(orders):,}")
             st.caption(
                 "Las órdenes anuladas se separan automáticamente del resultado principal."
             )
@@ -1262,19 +1391,45 @@ def render_business_tab(
         use_container_width=True,
         key="run_analysis",
     ):
-        keywords = extract_keywords(profile, keywords_text)
+        keywords, categories, keyword_source, profile_ai_error = resolve_business_terms(
+            profile,
+            keywords_text,
+        )
         if not keywords:
             st.warning(
                 "Agrega una descripción o al menos una palabra clave para iniciar."
             )
             return
 
-        result = analyze_orders(
-            orders,
-            keywords=keywords,
-            departments=selected_departments,
-            object_types=selected_objects,
-        )
+        try:
+            result = run_market_analysis(
+                orders,
+                keywords=keywords,
+                departments=selected_departments,
+                object_types=selected_objects,
+            )
+        except (FileNotFoundError, ValueError, KeyError) as exc:
+            st.error(f"No se pudo ejecutar el análisis de mercado: {exc}")
+            return
+
+        if result["summary"]["total_orders"] == 0 and keyword_source == "gemma":
+            fallback_keywords = extract_keywords(profile, keywords_text)
+            if fallback_keywords and {
+                _term_key(term) for term in fallback_keywords
+            } != {_term_key(term) for term in keywords}:
+                try:
+                    fallback_result = run_market_analysis(
+                        orders,
+                        keywords=fallback_keywords,
+                        departments=selected_departments,
+                        object_types=selected_objects,
+                    )
+                except (FileNotFoundError, ValueError, KeyError):
+                    fallback_result = result
+                if fallback_result["summary"]["total_orders"] > 0:
+                    keywords = fallback_keywords
+                    keyword_source = "local_after_gemma_no_match"
+                    result = fallback_result
 
         if result["summary"]["total_orders"] == 0:
             st.session_state.analysis = None
@@ -1283,14 +1438,31 @@ def render_business_tab(
                 "o elimina algunos filtros."
             )
         else:
-            result["report"] = build_report(result)
+            result["categories"] = categories
+            result["keyword_source"] = keyword_source
+            result["profile_ai_error"] = profile_ai_error
+            report, report_source, report_ai_error = generate_analysis_report(
+                result,
+                profile=profile,
+                categories=categories,
+            )
+            result["report"] = report
+            result["report_source"] = report_source
+            result["report_ai_error"] = report_ai_error
             st.session_state.analysis = result
             st.toast("Análisis completado", icon="✅")
+            if profile_ai_error or report_ai_error:
+                st.toast(
+                    "Gemma no estuvo disponible en todo el proceso; se aplicó el respaldo local.",
+                    icon="ℹ️",
+                )
+            keywords_display = escape(", ".join(keywords))
             st.markdown(
-                """
+                f"""
                 <div class="analysis-ready">
                     <strong>El análisis está listo.</strong> Continúa en Mercado para
-                    interpretar los resultados, luego revisa Evidencia e Informe.
+                    interpretar los resultados, luego revisa Evidencia e Informe.<br>
+                    <span>Términos utilizados: {keywords_display}</span>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1636,9 +1808,16 @@ def render_report_tab(analysis: dict[str, Any] | None) -> None:
         )
         return
 
+    categories = analysis.get("categories", [])
+    categories_line = (
+        f"**Categorías interpretadas:** {', '.join(categories)}\n\n"
+        if categories
+        else ""
+    )
     report_file = (
         "# Informe MYPE Radar\n\n"
         f"**Descripción empresarial:** {st.session_state.profile_text}\n\n"
+        f"{categories_line}"
         f"**Palabras clave:** {', '.join(analysis['keywords'])}\n\n"
         f"{analysis['report']}\n\n"
         f"_Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}_"

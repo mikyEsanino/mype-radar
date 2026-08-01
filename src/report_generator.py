@@ -1,34 +1,140 @@
-from dotenv import load_dotenv
-from google import genai
+"""Generación del informe de inteligencia de mercado mediante Gemma."""
 
-load_dotenv("api.env")
-client = genai.Client()
-#buenas tardes
-def generar_informe(contexto_datos: dict) -> str:
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_MODEL = "gemma-4-26b-a4b-it"
+
+
+class ReportGenerationError(RuntimeError):
+    """Error controlado durante la generación del informe."""
+
+
+def _load_environment() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    module_dir = Path(__file__).resolve().parent
+    candidates = [
+        module_dir.parent / "api.env",
+        module_dir / "api.env",
+        Path.cwd() / "api.env",
+    ]
+    for path in candidates:
+        if path.exists():
+            load_dotenv(path, override=False)
+            return
+    load_dotenv(override=False)
+
+
+def _get_client() -> Any:
+    _load_environment()
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise ReportGenerationError(
+            "Falta la dependencia google-genai. Instálala con "
+            "`pip install google-genai`."
+        ) from exc
+
+    if not (
+        os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    ):
+        raise ReportGenerationError(
+            "No se encontró GEMINI_API_KEY ni GOOGLE_API_KEY en el entorno."
+        )
+
+    try:
+        return genai.Client()
+    except Exception as exc:
+        raise ReportGenerationError(
+            f"No se pudo inicializar el cliente de Gemma: {exc}"
+        ) from exc
+
+
+def generar_informe(
+    contexto_datos: dict[str, Any],
+    *,
+    client: Any | None = None,
+    model: str | None = None,
+) -> str:
+    """Redacta el informe usando únicamente agregados calculados por analytics."""
+    if not isinstance(contexto_datos, dict) or not contexto_datos:
+        raise ReportGenerationError(
+            "El contexto del informe está vacío o no es válido."
+        )
+
+    try:
+        context_json = json.dumps(
+            contexto_datos,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ReportGenerationError(
+            f"No se pudo serializar el contexto del informe: {exc}"
+        ) from exc
+
     prompt = f"""
-    Eres un analista de mercado. Usa ÚNICAMENTE estos datos, no inventes
-    entidades, montos ni oportunidades activas:
-    {contexto_datos}
+Eres un analista de inteligencia de mercado para MYPE peruanas.
 
-    IMPORTANTE: Estos datos representan órdenes de compra que entidades públicas
-    ya han realizado en el mercado (a distintos proveedores), NO el historial del
-    negocio del usuario. El usuario es una MYPE que está EVALUANDO si entrar a este
-    mercado, no alguien que ya vendió estos servicios.
+Usa ÚNICAMENTE el siguiente JSON, calculado por la función
+analytics.analizar_mercado. No inventes entidades, cifras, fechas,
+procesos activos ni información externa:
 
-    Escribe un informe de inteligencia de mercado con dos partes:
+{context_json}
 
-    1. RESUMEN DEL MERCADO (máximo 100 palabras): explica qué demanda existe en el
-    mercado estatal para su rubro según estos datos: cuántas órdenes se han
-    registrado, qué entidades compran más, y en qué meses hay más actividad.
+Los registros representan compras históricas realizadas por entidades públicas
+a distintos proveedores. NO son ventas de la empresa usuaria. La empresa está
+evaluando este mercado.
 
-    2. RECOMENDACIONES Y RUTA DE PREPARACIÓN (máximo 100 palabras): basándote
-    ÚNICAMENTE en los patrones de estos datos (no en información externa), sugiere
-    2-3 pasos generales que el MYPE podría considerar para prepararse ante este tipo
-    de mercado. No prometas contratos, no menciones licitaciones activas específicas,
-    y no des a entender que estos son resultados propios del negocio del usuario.
-    """
-    response = client.models.generate_content(
-        model="gemma-4-26b-a4b-it",
-        contents=prompt
+Redacta en Markdown exactamente estas secciones:
+
+### Lectura ejecutiva
+Máximo 120 palabras. Explica el volumen histórico, monto, entidades y periodos
+más relevantes. Toda cifra mencionada debe coincidir exactamente con el JSON.
+
+### Recomendaciones iniciales
+Máximo 120 palabras. Propón entre 2 y 4 acciones generales de preparación
+derivadas exclusivamente de los patrones observados.
+
+### Alcance
+Máximo 45 palabras. Aclara que es información histórica, que no identifica
+oportunidades activas y que no garantiza una contratación.
+
+No agregues introducciones, despedidas ni bloques de código.
+""".strip()
+
+    active_client = client or _get_client()
+    active_model = (
+        model
+        or os.getenv("GEMMA_MODEL")
+        or DEFAULT_MODEL
     )
-    return response.text
+
+    try:
+        response = active_client.models.generate_content(
+            model=active_model,
+            contents=prompt,
+        )
+    except Exception as exc:
+        raise ReportGenerationError(
+            f"No se pudo generar el informe con Gemma: {exc}"
+        ) from exc
+
+    report = str(getattr(response, "text", "") or "").strip()
+    if not report:
+        raise ReportGenerationError(
+            "Gemma devolvió un informe vacío."
+        )
+
+    return report
