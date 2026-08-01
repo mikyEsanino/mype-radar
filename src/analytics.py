@@ -577,7 +577,6 @@ def analizar_mercado(
         departamentos=departamentos,
         objetos_contractuales=objetos_contractuales,
         app_dir=app_dir,
-        datos=datos,
     )
 
     if matched.empty:
