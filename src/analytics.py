@@ -576,7 +576,6 @@ def analizar_mercado(
         tipo_orden=tipo_orden,
         departamentos=departamentos,
         objetos_contractuales=objetos_contractuales,
-        objeto_contractual=objeto_contractual,
         app_dir=app_dir,
         datos=datos,
     )
