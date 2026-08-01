@@ -280,12 +280,12 @@ def cargar_y_limpiar(path: Path) -> pd.DataFrame:
     frame["fecha_registro"] = convertir_fecha(frame["fecha_registro"])
     frame["fecha_emision"] = convertir_fecha(frame["fecha_emision"])
 
-    # Para analizar la demanda usamos la fecha de emisión.
-    # Si está vacía, usamos la fecha de registro como respaldo.
-    analysis_date = frame["fecha_emision"].fillna(
-        frame["fecha_registro"]
+    
+    # Los archivos mensuales están organizados por fecha de registro.
+    # Esta será la fecha principal para el análisis del MVP.
+    analysis_date = frame["fecha_registro"].fillna(
+        frame["fecha_emision"]
     )
-
     # Solo utilizaremos año y mes: 2026-01, 2026-02, etc.
     frame["periodo"] = (
         analysis_date
