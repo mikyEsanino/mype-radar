@@ -216,4 +216,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Archivos originales pesados
+data/raw/
+*.xlsx
+
+# Variables privadas
+.env
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
 api.env
